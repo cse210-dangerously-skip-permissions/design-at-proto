@@ -1,6 +1,6 @@
 # Federated Event Trust Lab
 
-**CSE 210 · Team 03 (WE BALL)** · **November 5, 2026** · **Working design / four-week PoC**
+**CSE 210 · Team 03 (WE BALL)** · **November 6, 2026** · **Working design / three-week core + optional stretch sprint**
 
 ## Imagine this
 
@@ -8,7 +8,7 @@ You buy a concert ticket. The organizer publishes a **“ticket issued” event*
 
 **That's the idea:** a public, tamper-evident event history whose trust checks don't depend solely on the publisher. We test whether AT adds anything beyond an equivalently witnessed, signed HTTP server.
 
-*This is a motivating scenario, not a ticketing product.* Our four-week demo uses synthetic software-release events; we are **not** verifying payments, ticket ownership, or preventing double-spending.
+*This is a motivating scenario, not a ticketing product.* Our demo uses synthetic software-release events; we are **not** verifying payments, ticket ownership, or preventing double-spending.
 
 ## Vocabulary
 
@@ -28,18 +28,16 @@ You buy a concert ticket. The organizer publishes a **“ticket issued” event*
 
 ## Scope
 
-- **P0 — Core:** Publish custom records, authenticate them, maintain per-stream order, recover after a crash, and detect a witnessed publisher rewrite. Show **one** end-to-end demo with a signed-withdrawal control.
-- **P1-A — Trust dashboard:** Current and witnessed heads, plus `accept` / `conflict` / `unknown` with a short explanation.
-- **P1-B — DID-only onboarding:** Given a publisher's DID, discover and authenticate its current PDS without hardcoding its server.
-- **P1-C — Witness freshness:** Show `verified_as_of` and explicitly mark stale or unreachable state `unknown`.
-- **Deferred:** Content mirrors, multiple-witness voting, reputation scoring, PDS migration, partitions, consensus, and production deletion/opt-out policy.
+- **P0 — Three-week commitment:** Publish and authenticate custom records, enforce per-stream order, recover a crashed consumer, and detect one witnessed publisher rewrite. Demo a signed withdrawal, compare against an equivalently witnessed signed server, and test DID-only onboarding.
+- **Stretch — Only after P0 passes:** Trust dashboard, witness-freshness instrumentation, broader fault injection, multi-PDS/relay experiment, and one live-network smoke test.
+- **Deferred:** Content mirrors, multiple-witness voting, reputation scoring, full PDS migration, partitions, consensus, and production deletion/opt-out policy.
 - **Dependencies:** Use crypto, CID/CAR/MST, DID, WebSocket, database, and `@atproto/sync` libraries as needed. **Our team builds** the event contract, cutover/checkpoints, witness, auditor, benchmarks, and UI; we do not adopt an entire existing event system.
 
 **Retention for this PoC:** Synthetic data only. Keep the older witnessed proof through its audit test, then clean up the fixture. Do not implement ongoing hash-retention rules or automatically replace an older proof before checking that a newer head extends it.
 
 ## What the product could look like
 
-### P0 at the end of four weeks — a working local CLI/demo
+### P0 by the end of week 3 — a working local CLI/demo
 
 A developer runs one command, watches a publisher's events get witnessed, then sees the consumer recover and **explain a tampered history**. A basic test report accompanies the demo; no polished UI or multi-node deployment is required.
 
@@ -53,7 +51,7 @@ AUDIT     CONFLICT: event 3 references the old event-2 CID
 CONTROL   clean reset; signed withdrawal → ACCEPT
 ```
 
-### Fully fleshed-out vision — future product, **not a four-week promise**
+### Fully fleshed-out vision — future product, **not a three-week promise**
 
 A developer-facing console for **multiple AT publishers and streams**. Consumers pick which DIDs/witnesses they trust, inspect cryptographic evidence, monitor lag and freshness, and recover from permitted mirrors when upstream hosting fails.
 
@@ -78,6 +76,8 @@ History audit       seq 126 changed after signed checkpoint
 3. **Recover:** Our code takes a current `com.atproto.sync.getRepo` snapshot, reconciles buffered live updates, and resumes its local checkpoint.
 4. **Audit:** A witness independently captures a **publisher-signed commit, head proof, and its own observation receipt**. Our auditor compares current history against that prior evidence.
 
+**Runtime ownership:** The publisher writes when its application emits an event. The witness subscribes, verifies, and stores a checkpoint on each observed stream-head update; it does **not** publish every checkpoint back onto AT. For P0, consumers request witnessed evidence from our small local HTTP API. On restart, the **consumer sync engine** rebuilds its own view from the PDS; a hash-only witness cannot restore missing publisher content. See [Operational model](docs/operational-model.md) for triggers, calls, and failure behavior.
+
 AT provides verifiable **current** repository state, not a permanent append-only log or a universally trusted witness. The application defines and checks its own historical commitments.
 
 ### System architecture
@@ -90,10 +90,10 @@ flowchart TD
         P --> F
     end
     subgraph OUR [Team-built system]
-        B["Snapshot and live reconciliation"]
+        B["Consumer sync engine"]
         C["Consumer and auditor"]
         V["View and durable checkpoint"]
-        D["Minimal trust dashboard"]
+        D["CLI audit result"]
         B --> C
         C --> V
         V --> D
@@ -111,7 +111,7 @@ flowchart TD
     class W trust;
 ```
 
-**Without the diagram:** PDS → firehose → consumer → view/dashboard; the consumer also obtains PDS snapshots, while a separate witness supplies prior signed evidence.
+**Without the diagram:** PDS → firehose → consumer → view/CLI result; the consumer also obtains PDS snapshots, while a separate witness supplies prior signed evidence.
 
 ### Trust model
 
@@ -160,7 +160,7 @@ Assume **one dishonest publisher** and **one honest witness that previously save
 | Publisher truncates a head or rewrites a suffix | **Test** | Conflict with saved signed checkpoint. |
 | Consumer crashes/misses live events | **Core demo** | Rebuild from retained state and resume, or report a gap. |
 | Legitimate signed withdrawal | **Control** | `accept`; no false rollback allegation. |
-| Stale-but-signed witness / temporary PDS outage | **P1-C** | Known staleness flagged; otherwise `unknown`, not proof of freshness. |
+| Stale-but-signed witness / temporary PDS outage | **Stretch** | Known staleness flagged; otherwise `unknown`, not proof of freshness. |
 | Rewriting history before **any** honest observation | **Out** | There is no earlier evidence to compare. |
 | Colluding witnesses/publisher, stolen keys, global consensus | **Out** | No guarantee. |
 | Malicious PDS split view, PDS migration, full mirror failover | **Stretch** | Not needed for the core demo. |
@@ -169,7 +169,7 @@ Assume **one dishonest publisher** and **one honest witness that previously save
 
 1. Publish three synthetic software-release events; the witness saves the signed head at sequence 3. The consumer initially accepts the stream.
 2. Stop the consumer. Have the controlled publisher **replace event 2 in place** while leaving event 3 and the application head untouched.
-3. Restart the consumer. Rebuild via `getRepo`; event 3 still references the **old** event-2 CID. Show the failed comparison and the **`conflict`** verdict in the dashboard.
+3. Restart the consumer. Rebuild via `getRepo`; event 3 still references the **old** event-2 CID. Show the failed comparison and the **`conflict`** verdict in the CLI result.
 4. Reset the fixture, append a **valid signed withdrawal** at the next sequence, and show **`accept`**.
 
 **Pass:** Detect the injected edit on repeat runs; do not falsely flag the withdrawal; restore the correct retained view/checkpoint. Record recovery time, proof-check time, missing/duplicate count, and test pass rate.
@@ -186,21 +186,21 @@ Use identical synthetic events, witness logic, and failure schedules across all 
 - **Integrity:** Detection rate for witnessed rewrites; false conflicts on clean withdrawals.
 - **Recovery:** Missing/duplicate events, final-view equality, p95 rebuild time.
 - **Overhead:** Verification latency and retained proof bytes.
-- **AT-specific P1-B:** Onboard a consumer from only a DID; compare setup steps, time, and failures against S0's documented URL/key bootstrap.
-- **Freshness P1-C:** Verify correct `verified_as_of` and `unknown` status after disconnection.
+- **AT-specific P0:** Onboard a consumer from only a DID; compare setup steps, time, and failures against S0's documented URL/key bootstrap.
+- **Stretch freshness:** Verify correct `verified_as_of` and `unknown` status after disconnection.
 
 **Honest outcome:** If A1 adds no measurable portability, recovery, or verification benefit over S1 for this workload—or costs materially more—report that. A negative result is still a useful software-engineering finding.
 
-## Four-week plan
+## Three-week delivery plan + optional stretch sprint
 
 | Week | Deliverable | Exit check |
 | --- | --- | --- |
-| **1 — Protocol spike** | Local PDS/PLC, Lexicon publisher, DID allowlist, authenticated firehose, consumer-kill/`getRepo` rebuild spike, proof tests. | **Three repeatable runs:** verified publish, crash/restart reconstruction, invalid-proof rejection; probe missing-key `getRecord`. If this fails, document fallback to local PostgreSQL log + AT attestations. |
-| **2 — Event/replay** | Atomic stream-head writes, required CID links, signed withdrawals, snapshot/live cutover, checkpoints; build **S0** signed HTTP baseline. | Consistent reference state; mutation, retry, and concurrent-write tests pass. |
-| **3 — Witness + B/C** | Save signed head/proofs; implement rollback auditor, freshness status, **S1**, and DID-only onboarding experiment. | Injected rewrite detected; clean withdrawal accepted; onboarding and stale-status checks recorded. |
-| **4 — Dashboard + evidence** | Minimal **A** trust dashboard, S0/S1/A0/A1 benchmarks, single demo, live-network smoke test, brief ADRs/retrospective. | Reproducible results and explicit limitations. |
+| **1 — Prove the protocol path** | Local PDS/PLC, Lexicon publisher, DID allowlist, verified firehose, consumer-kill/`getRepo` rebuild spike, invalid-proof test; probe missing-key `getRecord`. | **Three repeatable runs:** verified publish, crash/restart reconstruction, invalid-proof rejection. If the gate fails, decide immediately whether to use a local PostgreSQL log + AT attestations fallback. |
+| **2 — Finish the core failure demo** | Atomic writes and CID links, signed withdrawals, snapshot/live cutover, durable checkpoints, independent witness with proof storage/API, rollback auditor. | Repeat publisher interior-rewrite → `conflict` and valid withdrawal → `accept` three times; clean runs have zero gaps/duplicates. |
+| **3 — Measure and ship** | S0/S1 signed-server baseline, A0/A1 comparison, DID-only onboarding test, automated fault tests, reproducible CLI demo, limitations and brief ADRs/retro. | Publish 2×2 result table (correctness, recovery time, proof overhead), pass one repeatable demo, and explain what AT adds or fails to add. |
+| **Stretch sprint (optional)** | Minimal dashboard, freshness UI/status, additional tampering and outage tests, multi-PDS/relay federation experiment, live-network smoke test. | Only begin after week-3 core and evidence are stable; explicitly report what was and wasn't tested. |
 
-**Test environment:** All team services run locally. Use a controlled PDS/PLC fixture for crashes and tampering; a local PDS **without a relay does not prove federation**. Keep one live-network smoke test, not hosted load/outage testing. Use standard libraries where helpful; don't copy another application's event system.
+**Test environment:** All core services run locally. Use a controlled PDS/PLC fixture for crashes and tampering; a local PDS **without a relay does not prove federation**. A live-network smoke test is optional stretch, not a gate. Use standard libraries where helpful; don't copy another application's event system.
 
 **Engineering practice:** Track user stories/issues, review PRs, run CI, and write ADRs for architectural tradeoffs—not routine imports.
 
@@ -214,8 +214,8 @@ These are **working defaults**, not a requirement to reinvent standard infrastru
 | **Local AT PDS + PLC** (e.g., `@atproto/dev-env`) | Real AT repositories/DIDs under our control; repeatable outages and tampering without touching hosted accounts. |
 | **`@atproto/sync` + `@atproto/crypto` / repo utilities** | Authenticate firehose commits, signatures, and CAR/MST proofs using established protocol libraries. We still write our own history auditor and recovery logic. |
 | **SQLite** | Simple local persistence for consumer checkpoints/views and the signed HTTP baseline; transactional crash tests without running a database cluster. |
-| **Node CLI + small HTTP API** | The P0 terminal demo and a narrow interface for benchmarks/inspection; minimal deployment overhead. |
-| **React + Vite (P1-A)** | Lightweight trust dashboard using the same TypeScript data contracts; defer UI work until the core demo passes. |
+| **Node CLI + small HTTP API** | The P0 terminal demo, witness checkpoint lookup, and a narrow interface for benchmarks/inspection; minimal deployment overhead. |
+| **React + Vite (stretch)** | Lightweight trust dashboard using the same TypeScript data contracts; defer UI work until the core demo passes. |
 | **Vitest + scripted fault-injection/benchmark harness** | Deterministic publisher edits, consumer crashes, repeat runs, and exported timing/correctness results. |
 | **Docker Compose + GitHub Actions** | Run team-owned services locally and check tests/builds on every PR. **No AWS/CDK or Kafka cluster.** |
 
