@@ -1,0 +1,58 @@
+# Operational Model: Who Publishes, Witnesses, and Recovers?
+
+**Companion to the [Federated Event Trust Lab design](../README.md).** This is the intended three-week P0 behavior, not a claim that AT Protocol supplies a durable immutable queue.
+
+## The one-sentence model
+
+**Publishers own events; independent witnesses retain evidence of what they saw; consumers choose witnesses, reconstruct their own state, and audit for contradictions.** No central service decides what the whole network must trust.
+
+## Who talks to whom?
+
+| Actor | Trigger | Action | Where data goes |
+| --- | --- | --- | --- |
+| **Publisher CLI/app** | A real application event occurs (demo: synthetic software release) | Atomically create a custom event and advance a stream-head record using `applyWrites`/`swapCommit` | Publisher's **PDS**, not our witness |
+| **AT PDS/firehose** | Repository commit accepted | Announces signed repo changes to subscribers | Witness and consumer subscriptions; a relay is optional locally |
+| **Our witness** | Verified stream-head update arrives | Verify publisher evidence, check it extends the last witnessed head, retain signed commit + head proof + witness receipt | Witness's durable local store |
+| **Our consumer** | Live update, startup, or sync gap | Verify allowed DID, process events, reconcile current repo and witness proof | Its materialized view and durable checkpoint |
+| **Our auditor** | Consumer sees a new head or completes recovery | Compare current chain against independently retained history | `accept`, `conflict`, or `unknown` with evidence |
+
+**Does everyone ping us?** No. Publishers write to their own PDS. Witness and consumer subscribe to changes. For P0, a consumer **requests a witness checkpoint over a small read-only HTTP API** when auditing. The witness does not have to republish an AT record for each observation. Publishing witness receipts to AT is future work, not part of P0.
+
+## What happens, in order?
+
+1. **Publish:** A publisher emits `releases:1`, then `:2`, then `:3`. Each event references the previous event CID. The stream head records the latest sequence and CID.
+2. **Witness:** A separate process independently observes verified publisher commits and saves historical evidence. **P0 rule: attempt to checkpoint each verified stream-head update.** It must never silently discard an older proof before checking continuity.
+3. **Consume:** An application processes the same stream, recording a transactional checkpoint of the state it has applied.
+4. **Audit:** Given a consumer-selected trusted witness, the auditor checks whether the current chain extends the previously witnessed head. A real contradiction is `conflict`; no fresh evidence or unavailable state can be `unknown` rather than falsely declared safe.
+5. **Recover:** After a consumer crash, subscribe and buffer live events, fetch the current repository with `getRepo`, verify and rebuild events in per-stream order, deduplicate buffered changes, then save view + checkpoint atomically. Audit against the persisted witnessed head.
+
+### Demo: one failure, one control
+
+| Step | Expected result |
+| --- | --- |
+| Publish release events 1–3 | Witness persists publisher-signed evidence of head 3 |
+| Stop consumer; publisher secretly replaces event 2 while retaining event 3 | Current chain disagrees with the witnessed event-2 CID |
+| Restart and rebuild consumer | Auditor reports **`conflict`** and identifies the broken link |
+| Reset fixture; append a legitimate signed withdrawal | Auditor reports **`accept`**; the change is part of the append-only application contract |
+
+## What *isn't* recovered?
+
+| Failure | P0 behavior |
+| --- | --- |
+| Consumer process dies | Rebuild from available PDS records and resume a durable checkpoint |
+| Consumer misses live messages | Reconcile current repository; reject unexplained sequence gaps |
+| Witness process dies | Restart from persisted proofs/checkpoint, verify continuity before observing newer heads |
+| PDS is temporarily unavailable | Cannot assert newest state; report `unknown` or a bounded last-observed state |
+| PDS loses or deletes event contents | **Not restored by our witness.** It keeps evidence of history, not a full content mirror |
+| Publisher rewrites history before any honest witness saw it | No earlier independent proof exists; cannot reliably detect this |
+
+**Witness ≠ mirror:** a witness can show what a publisher previously signed; a mirror could serve lost content. Mirrors, multi-witness voting, reputation, and availability guarantees are out of scope.
+
+## Local environment and decisions
+
+- **Local setup:** Run a local AT PDS/identity fixture, witness, consumer, and CLI with persistent stores for our processes. This is enough for the integrity and recovery demo; a single PDS does **not** prove network-wide federation.
+- **Working P0 API choice:** Read-only HTTP endpoint for latest and historical witnessed checkpoints, keyed by `(publisher DID, stream)`. Exact response schema and pagination are implementation details for week 2.
+- **Trust selection:** A local DID allowlist chooses publishers and witness identities. One honest independent witness is the P0 threat-model assumption; no global consensus is claimed.
+- **Timing and limits:** The firehose is a notification/sync path, not an archival event queue. During missed observations, the witness must verify continuity before replacing a prior checkpoint; if it cannot, it preserves the prior evidence and reports uncertainty.
+
+The [three-week plan, acceptance gates, and benchmarks](../README.md#three-week-delivery-plan--optional-stretch-sprint) stay in the main design.
